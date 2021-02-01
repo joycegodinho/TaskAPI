@@ -1,19 +1,30 @@
-const uuid = require('uuid');
 const { combineResolvers } = require('graphql-resolvers');
-
-const { users, tasks } = require('../constants')
 
 const Task = require('../database/models/task');
 const User = require('../database/models/user');
-const { isAuthenticated } = require('./middleware')
+const { isAuthenticated, isTaskOwner } = require('./middleware');
+const { stringToBase64, base64ToString } = require('../helper');
 
 module.exports = {
     Query: {
-        tasks: combineResolvers(isAuthenticated, async (_,__,{ loggedInUserId }) => {
+        tasks: combineResolvers(isAuthenticated, async (_, { cursor, limit = 10 },{ loggedInUserId }) => {
             try{
-                const tasks = await Task.find({ user: loggedInUserId });
-                return tasks;
-
+                const query = { user: loggedInUserId }; 
+                if(cursor) {
+                    query['_id'] = {
+                        '$lt': base64ToString(cursor) 
+                    }
+                };
+                let tasks = await Task.find(query).sort({ _id: -1 }).limit(limit + 1);
+                const hasNextPage = tasks.length > limit;
+                tasks = hasNextPage ? tasks.slice(0, -1) : tasks;
+                return {
+                    taskFeed: tasks,
+                    pageInfo: {
+                        nextPageCursor: hasNextPage ? stringToBase64([tasks.length - 1].id) : null,
+                        hasNextPage: hasNextPage
+                    }
+                };
             }catch (error) {
                 console.log(error);
                 throw error;
@@ -45,13 +56,35 @@ module.exports = {
                 console.log(error);
                 throw error;
             }
+        }), 
+
+        updateTask: combineResolvers(isAuthenticated, isTaskOwner, async(_, { id, input }) => {
+            try {
+                const task = await Task.findByIdAndUpdate(id, { ...input },{ new: true });
+                return task;
+            }catch (error){
+                console.log(error);
+                throw error;
+            }
+        }),
+
+        deleteTask: combineResolvers(isAuthenticated, isTaskOwner, async(_, { id }, { loggedInUserId }) => {
+            try {
+                const task = await Task.findByIdAndDelete(id);
+                await User.updateOne({ _id: loggedInUserId }, { $pull: { tasks: task.id } });
+                return task;
+            }catch (error){
+                console.log(error);
+                throw error;
+            }
         })
     },
     // level fild resolver, para puaxar o usuário da task 
     Task: {
-        user: async (parent) => {
+        user: async (parent, _, { loaders }) => {
             try{
-                const user = await User.findById(parent.user);
+                //const user = await User.findById(parent.user);
+                const user = await loaders.user.load(parent.user.toString());
                 return user;
 
             }catch (error) {

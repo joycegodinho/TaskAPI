@@ -5,6 +5,8 @@ const { combineResolvers } = require('graphql-resolvers');
 const User = require('../database/models/user');
 const Task = require('../database/models/task');
 const { isAuthenticated } = require('./middleware');
+const PubSub = require('../subscription')
+const { userEvents } = require('../subscription/events');
 
 module.exports = {
     Query: {
@@ -31,6 +33,9 @@ module.exports = {
                 const hashedPassword = await bcrypt.hash(input.password, 12);
                 const newUser = new User({...input, password: hashedPassword });
                 const result = await newUser.save();
+                PubSub.publish(userEvents.USER_CREATED, { 
+                    userCreated: result
+                });
                 return result;
             } catch (error) {
                 console.log(error);
@@ -56,6 +61,11 @@ module.exports = {
                 throw error;
 
             }
+        }
+    },
+    Subscription: {
+        userCreated: {
+            subscribe: () => PubSub.asyncIterator(userEvents.USER_CREATED)
         }
     },
     // level fild resolver, para puaxar o usuário da task 
